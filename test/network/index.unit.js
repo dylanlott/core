@@ -1,7 +1,5 @@
 'use strict';
 
-/* jshint maxstatements: false */
-
 var util = require('util');
 var sinon = require('sinon');
 var expect = require('chai').expect;
@@ -99,13 +97,36 @@ describe('Network (public)', function() {
       var _info = sinon.stub();
       Network.prototype.connect.call({
         node: { connect: _connect },
-        _logger: { info: _info }
+        _logger: { info: _info, warn: sinon.stub() }
       }, 'storj://127.0.0.1:1337/f39bc0ae7b79e89dca5100d7577fde0559bcda8c');
       expect(_connect.called).to.equal(true);
       setImmediate(() => {
         expect(_info.called).to.equal(true);
         done();
       });
+    });
+
+  });
+
+  describe('#ping', function() {
+
+    it('should call send with ping message', function() {
+      const _send = sinon.stub();
+      const farmer = {};
+      const contact = {};
+      Network.prototype.ping.call({
+        transport: {
+          send: _send,
+          contact: contact
+        },
+        farmer
+      }, contact, () => {
+        expect(_send.callCount).to.equal(1);
+        expect(_send.args[0][0]).to.equal(contact);
+        expect(_send.args[0][0].method).to.equal('PING');
+        expect(_send.args[0][0].params.contact).to.equal(contact);
+      });
+
     });
 
   });
@@ -327,6 +348,40 @@ describe('Network (public)', function() {
 });
 
 describe('Network (private)', function() {
+
+  describe('#_bindTransportHooks', function() {
+
+    it('should reset re-entry timeout after message receipt', function(done) {
+      var transport = new EventEmitter();
+      transport.before = sinon.stub();
+      transport.after = transport.on;
+      var _enterOverlay = sinon.stub();
+      var net = {
+        transport: transport,
+        _protocol: { getRouteMap: () => ({}) },
+        _enterOverlay: _enterOverlay,
+        _handleTransportError: sinon.stub(),
+        _signMessage: sinon.stub(),
+        _verifyMessage: sinon.stub()
+      };
+      Network.prototype._bindTransportHooks.call(net);
+      setImmediate(() => {
+        var clock = sinon.useFakeTimers();
+        transport.emit('receive');
+        setImmediate(() => {
+          expect(net._reEntryTimeout).to.not.equal(undefined);
+          clock.tick(constants.NET_REENTRY);
+          clock.restore();
+          setImmediate(() => {
+            expect(_enterOverlay.called).to.equal(true);
+            done();
+          });
+        });
+        clock.tick(10);
+      });
+    });
+
+  });
 
   describe('#_warnIfClockNotSynced', function() {
 
@@ -1379,7 +1434,9 @@ describe('Network (private)', function() {
       };
       var TunClientStubNetwork = proxyquire('../../lib/network', {
         diglet: {
-          Tunnel: function() { return emitter; }
+          Tunnel: function() {
+            return emitter;
+          }
         }
       });
       var net = TunClientStubNetwork({
@@ -1469,7 +1526,7 @@ describe('Network (private)', function() {
         'getContactList'
       ).callsArgWith(1, null, [
         {
-          address: '0.0.0.0',
+          address: '8.8.8.8',
           port: 1234,
           nodeID: utils.rmd160('nodeid'),
           protocol: VERSION.protocol
@@ -1557,8 +1614,7 @@ describe('Network (private)', function() {
       );
       sandbox.stub(net, '_setupTunnelClient').callsArg(0);
       net.join(function(err) {
-        expect(err).to.be.instanceOf(Error);
-        expect(err.message).to.equal('Failed to join the network');
+        expect(err).to.equal(null);
         expect(net.connect.callCount).to.equal(3);
         done();
       });
@@ -1676,23 +1732,6 @@ describe('Network (private/jobs)', function() {
       expect(dropped).to.have.lengthOf(2);
       expect(net.router._buckets[0].getSize()).to.equal(1);
       expect(net.router._buckets[2].getSize()).to.equal(0);
-    });
-
-  });
-
-  describe('#_updateActivityCounter', function() {
-
-    it('should reset the timeout and set it again', function(done) {
-      var clock = sinon.useFakeTimers();
-      var context = {
-        _reentranceCountdown: null,
-        _enterOverlay: function() {
-          clock.restore();
-          done();
-        }
-      };
-      Network.prototype._updateActivityCounter.call(context);
-      clock.tick(constants.NET_REENTRY);
     });
 
   });
